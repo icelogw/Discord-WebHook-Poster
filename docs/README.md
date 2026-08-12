@@ -384,6 +384,19 @@ A current browser, and a Discord webhook URL. Nothing else - no Discord account,
 Running from source additionally needs Node 18+ (it uses the built-in `fetch`). The exe needs
 nothing at all. There are no dependencies either way.
 
+## Reporting a bug
+
+Open an [issue](https://github.com/icelogw/Discord-WebHook-Poster/issues) and say what happened,
+what you expected, and which build you were on - the version is in the header of the app and in
+**Settings**. If it involves a message that failed to send, the error the app showed is the useful
+part; if you run from source, the console line for that send says more.
+
+Please don't paste a webhook URL into an issue - it is a credential, and anyone reading it could
+post to your channel. The webhook's name is enough.
+
+Code contributions aren't accepted: the licence doesn't allow modified copies, so a pull request
+isn't something that can be merged. Bug reports and suggestions are genuinely welcome though.
+
 ## Licence
 
 **Personal use only - this is not open source.** You may run it for your own private,
