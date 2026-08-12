@@ -1,0 +1,14 @@
+{
+  "name": "discord-webhook-poster",
+  "version": "1.0.0",
+  "description": "Compose and send Discord webhook messages - rich embeds, markdown, timestamps, polls and scheduling - with an optional proxy server that keeps webhook URLs out of the browser.",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "private": true,
+  "license": "SEE LICENSE IN LICENSE.md"
+}
