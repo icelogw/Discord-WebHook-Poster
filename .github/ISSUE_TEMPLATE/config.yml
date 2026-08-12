@@ -1,0 +1,6 @@
+# Anything that is not a bug - a suggestion, a question - can still be a blank issue.
+blank_issues_enabled: true
+contact_links:
+  - name: Read the documentation first
+    url: https://github.com/icelogw/Discord-WebHook-Poster/blob/main/docs/README.md
+    about: Setup, configuration, security notes and the known limits.

@@ -1,0 +1,63 @@
+name: Bug report
+description: Something in the app does not work
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        **Please do not paste a webhook URL here.** It is a credential - anyone reading this
+        issue could post to your channel with it. The webhook's *name* is enough.
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      placeholder: The message sent but the embed colour was ignored.
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected instead
+    validations:
+      required: true
+
+  - type: dropdown
+    id: how
+    attributes:
+      label: How are you running it
+      options:
+        - The packaged exe
+        - From source (npm start)
+        - The page opened straight from disk, no server
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: Shown in the app header, and under Settings in the Server section.
+      placeholder: 1.0.0
+    validations:
+      required: true
+
+  - type: textarea
+    id: message
+    attributes:
+      label: What the app told you
+      description: >
+        The red or amber line in the app, word for word. If you run from source, the console
+        line for that action says more - it starts with a + - ! or a dot.
+      render: text
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: Only if it is not obvious from the above.
+      placeholder: |
+        1. Add an embed
+        2. Set the colour to #3ba55c
+        3. Send
