@@ -1,0 +1,55 @@
+name: Build the exe
+
+# Pushing a v* tag builds the executable and attaches it to that tag's release.
+# Pushing a change to the app itself just proves it still builds. It can also be
+# run by hand from the Actions tab.
+on:
+  push:
+    tags: ['v*']
+    branches: [main]
+    paths: ['index.html', 'server.js', 'package.json', 'build.js', 'sea-config.json',
+            '.github/workflows/build.yml']
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-latest          # a Windows exe needs a Windows node binary to bundle
+    permissions:
+      contents: write                # only used to upload the asset to a release
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'         # SEA needs 20.12+; build.js checks and says so
+
+      # No npm install: there are no dependencies. postject is fetched by npx
+      # inside build.js, which is the only thing the build needs from the network.
+      - name: Build
+        run: node build.js
+
+      # A tag saying v1.2.0 while package.json says something else would ship a
+      # binary that reports the wrong version to the update checker.
+      - name: Check the version matches the tag
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: bash
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          pkg=$(node -p "require('./package.json').version")
+          echo "tag=$tag  package.json=$pkg"
+          [ "$tag" = "$pkg" ] || { echo "::error::tag $GITHUB_REF_NAME does not match package.json $pkg"; exit 1; }
+
+      - name: Keep the build even when there is no release
+        uses: actions/upload-artifact@v4
+        with:
+          name: DiscordWebhookPoster
+          path: DiscordWebhookPoster.exe
+          retention-days: 14
+
+      - name: Attach it to the release
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "$GITHUB_REF_NAME" DiscordWebhookPoster.exe --clobber
