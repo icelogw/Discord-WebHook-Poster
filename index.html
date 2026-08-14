@@ -226,6 +226,8 @@
   .status.info{background:#5865f21f;border-color:#5865f255;color:#a9b0f7}
   .status.warn{background:#f0b1321f;border-color:#f0b13255;color:#f5cf7d}
   .status .x{margin-left:auto;cursor:pointer;opacity:.6;flex:none}
+  .status .statusact{margin-left:auto;flex:none;align-self:center}
+  .status .statusact + .x{margin-left:0}
   .status .x:hover{opacity:1}
 
   .q{display:flex;flex-direction:column;gap:8px}
@@ -308,6 +310,20 @@
   .filechip b{font-size:12.5px;color:var(--txt);word-break:break-all}
   .filechip .sz{font-size:11px;color:var(--faint);margin-top:1px}
   .filechip .lost{font-size:11.5px;color:var(--err)}
+  .q-item .pick{flex:none;margin:1px 2px 0 0;cursor:pointer}
+
+  /* ---------- emoji picker ---------- */
+  #emojiPop{position:absolute;z-index:60;margin-top:2px;width:296px;padding:8px;
+            background:var(--bg2);border:1px solid var(--line);border-radius:8px;
+            box-shadow:0 10px 30px #000a;display:flex;flex-direction:column;gap:7px}
+  #emojiSearch{height:28px;font-size:12.5px}
+  #emojiGrid{display:grid;grid-template-columns:repeat(8,1fr);gap:2px;
+             max-height:186px;overflow:auto}
+  #emojiGrid button{background:none;border:none;border-radius:5px;cursor:pointer;
+                    font-size:19px;line-height:1;padding:5px 0}
+  #emojiGrid button:hover{background:var(--bg4)}
+  #emojiGrid .none{grid-column:1/-1;color:var(--faint);font-size:12px;padding:8px 4px}
+
   /* ---------- settings ---------- */
   /* four panels of settings need more room than a confirmation box gets */
   #setDialog{max-width:760px}
@@ -503,6 +519,15 @@
             <button id="btnLink" title="Masked link  (Ctrl+K)" aria-label="Masked link"><svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M6.75 4.5H5a3.5 3.5 0 0 0 0 7h1.75a.75.75 0 0 0 0-1.5H5a2 2 0 0 1 0-4h1.75a.75.75 0 0 0 0-1.5Z"/><path d="M9.25 4.5H11a3.5 3.5 0 0 1 0 7H9.25a.75.75 0 0 1 0-1.5H11a2 2 0 0 0 0-4H9.25a.75.75 0 0 1 0-1.5Z"/><path d="M5.25 8a.75.75 0 0 1 .75-.75h4a.75.75 0 0 1 0 1.5H6A.75.75 0 0 1 5.25 8Z"/></svg></button>
             <span class="sep"></span>
             <button id="btnTime" title="Insert a Discord timestamp" aria-label="Insert timestamp"><svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 1.5a6.5 6.5 0 1 0 0 13 6.5 6.5 0 0 0 0-13ZM3 8a5 5 0 1 1 10 0A5 5 0 0 1 3 8Z"/><path d="M8.75 4.5a.75.75 0 0 0-1.5 0v3.6c0 .28.16.54.41.67l2.25 1.13a.75.75 0 0 0 .68-1.34l-1.84-.92V4.5Z"/></svg></button>
+            <button id="btnEmoji" title="Insert an emoji" aria-label="Insert emoji"><svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 1.5a6.5 6.5 0 1 0 0 13 6.5 6.5 0 0 0 0-13ZM3 8a5 5 0 1 1 10 0A5 5 0 0 1 3 8Z"/><circle cx="6.1" cy="6.6" r="1"/><circle cx="9.9" cy="6.6" r="1"/><path d="M5.3 9.5a.75.75 0 0 1 1.05.16 2.05 2.05 0 0 0 3.3 0 .75.75 0 0 1 1.2.9 3.55 3.55 0 0 1-5.7 0 .75.75 0 0 1 .15-1.06Z"/></svg></button>
+          </div>
+          <!-- anchored under the toolbar rather than in a dialog: picking an emoji
+               should not take the caret out of the message box -->
+          <div id="emojiPop" style="display:none">
+            <input type="text" id="emojiSearch" placeholder="Search - smile, tick, arrow…" spellcheck="false" autocomplete="off">
+            <div id="emojiGrid"></div>
+            <div class="hint">Server emoji are <code>:name:</code> - type those straight into the
+              message.</div>
           </div>
           <textarea id="content" rows="6" spellcheck="true"
             placeholder="Message content - supports Discord markdown. Leave empty if you are only sending embeds."></textarea>
@@ -647,7 +672,13 @@
         <button class="sm" id="btnLoadMsg" title="Load a message by its ID">Load by ID…</button>
         <button class="sm danger" id="btnClearSent">Clear list</button>
       </h2>
-      <div class="body"><div class="q" id="sentList"></div>
+      <div class="body">
+        <div id="sentBulk" style="display:none;gap:8px;align-items:center">
+          <span class="count" id="sentPickCount" style="margin:0"></span>
+          <button class="sm danger" id="btnPickDelete">Delete selected</button>
+          <button class="sm" id="btnPickNone">Clear selection</button>
+        </div>
+        <div class="q" id="sentList"></div>
         <div class="hint" id="sentHint">Kept in this browser so you can edit or delete a message
           after posting it. Clearing the list does not remove anything from Discord.</div>
       </div>
@@ -657,6 +688,8 @@
     <section class="card" id="hookInfoCard">
       <h2>Webhook details
         <span class="spacer"></span>
+        <button class="sm" id="btnCheckAll" style="display:none"
+                title="Ask Discord about every saved webhook, one at a time">Check all</button>
         <button class="sm" id="btnHookInfo">Look up</button>
       </h2>
       <div class="body">
@@ -1627,6 +1660,52 @@ async function post(target, threadId, payload, { retry = true, op = 'send', mess
     : { id: j.id ?? null, data: j };
 }
 
+const friendlyErr = m => /Failed to fetch|NetworkError/i.test(m)
+  ? (SERVER.on ? 'Could not reach the local server - is it still running?'
+               : 'Network request failed. Check the URL, your connection, and that the webhook '
+                 + 'still exists.')
+  : m;
+
+/* Send to each target in turn - Discord rate-limits per webhook, and one dead
+   target should not cost the others their send. Separate from sendNow() so a
+   retry can run the same path with only the targets that failed, rather than
+   sending twice to the ones that worked. */
+async function deliver(targets, payload, files) {
+  const results = [];
+  for (const target of targets) {
+    const label = target.mode === 'server' ? target.profile : 'the webhook';
+    try {
+      const msg = await post(target, state.threadId, payload, { files });
+      recordSent(msg?.id, target, state.threadId, payload);
+      if (target.mode === 'server') markDead(target.profile, false);
+      results.push({ target, label, ok: true, id: msg?.id || '' });
+    } catch (e) {
+      /* a send is proof either way, so no extra request is needed */
+      if (target.mode === 'server' && /unknown webhook|10015/i.test(e.message))
+        markDead(target.profile, true);
+      results.push({ target, label, ok: false, err: friendlyErr(e.message) });
+    }
+  }
+  if (SERVER.on) refreshSent();            /* the log is authoritative */
+
+  const good = results.filter(r => r.ok), bad = results.filter(r => !r.ok);
+  const retry = bad.length ? {
+    label: bad.length > 1 ? 'Retry ' + bad.length : 'Retry',
+    run: () => deliver(bad.map(r => r.target), payload, files)
+  } : null;
+
+  if (targets.length === 1)
+    return bad.length
+      ? setStatus('err', bad[0].err, retry)
+      : setStatus('ok', 'Sent' + (good[0].id ? ' - message ID ' + good[0].id : '') + '.');
+  if (!bad.length)
+    return setStatus('ok', 'Sent to all ' + good.length + ' webhooks: '
+                           + good.map(r => r.label).join(', ') + '.');
+  setStatus(good.length ? 'warn' : 'err',
+    'Sent to ' + good.length + ' of ' + targets.length + '.\n'
+    + bad.map(r => r.label + ': ' + r.err).join('\n'), retry);
+}
+
 async function sendNow() {
   const errs = validate();
   if (errs.length) return setStatus('err', errs.join('\n'));
@@ -1656,43 +1735,10 @@ async function sendNow() {
       setStatus('ok', 'Message ' + editing.id + ' updated.');
       editing = null; updateEditUi();
     } else {
-      const targets = allTargets();
-      /* One at a time. Discord rate-limits per webhook, and a failure on one
-         target should not cost the others their send. */
-      const results = [];
-      for (const target of targets) {
-        const label = target.mode === 'server' ? target.profile : 'the webhook';
-        try {
-          const msg = await post(target, state.threadId, payload, { files });
-          recordSent(msg?.id, target, state.threadId, payload);
-          if (target.mode === 'server') markDead(target.profile, false);
-          results.push({ label, ok: true, id: msg?.id || '' });
-        } catch (e) {
-          /* a send is proof either way, so no extra request is needed */
-          if (target.mode === 'server' && /unknown webhook|10015/i.test(e.message))
-            markDead(target.profile, true);
-          results.push({ label, ok: false, err: e.message });
-        }
-      }
-      if (SERVER.on) refreshSent();          /* the log is authoritative */
-      const good = results.filter(r => r.ok), bad = results.filter(r => !r.ok);
-      if (targets.length === 1) {
-        if (bad.length) throw new Error(bad[0].err);
-        setStatus('ok', 'Sent' + (good[0].id ? ' - message ID ' + good[0].id : '') + '.');
-      } else if (!bad.length) {
-        setStatus('ok', 'Sent to all ' + good.length + ' webhooks: '
-                        + good.map(r => r.label).join(', ') + '.');
-      } else {
-        setStatus(good.length ? 'warn' : 'err',
-          'Sent to ' + good.length + ' of ' + targets.length + '.\n'
-          + bad.map(r => r.label + ': ' + r.err).join('\n'));
-      }
+      await deliver(allTargets(), payload, files);
     }
   } catch (e) {
-    setStatus('err', /Failed to fetch|NetworkError/i.test(e.message)
-      ? (SERVER.on ? 'Could not reach the local server - is it still running?'
-                   : 'Network request failed. Check the URL, your connection, and that the webhook still exists.')
-      : e.message);
+    setStatus('err', friendlyErr(e.message));
   } finally {
     btn.disabled = false;
     updateEditUi();
@@ -1791,13 +1837,26 @@ function renderSent() {
     : 'Kept in this browser so you can edit or delete a message after posting it. Clearing the ' +
       'list does not remove anything from Discord.';
   box.innerHTML = '';
+  /* a selection kept across re-renders would point at messages that are gone */
+  picked = new Set([...picked].filter(id => sent.some(m => m.id === id)));
   for (const m of sent) {
     const el = document.createElement('div');
     el.className = 'q-item';
-    el.innerHTML = '<span class="dot" style="background:var(--ok)"></span>' +
+    const tick = document.createElement('input');
+    tick.type = 'checkbox';
+    tick.className = 'pick';
+    tick.checked = picked.has(m.id);
+    tick.title = 'Select for bulk delete';
+    tick.onchange = () => {
+      tick.checked ? picked.add(m.id) : picked.delete(m.id);
+      renderPicked();
+    };
+    el.appendChild(tick);
+    el.insertAdjacentHTML('beforeend',
+      '<span class="dot" style="background:var(--ok)"></span>' +
       '<span class="txt"><div class="t1">' + esc(m.summary) + '</div>' +
       '<div class="t2">' + esc(new Date(m.at).toLocaleString()) + ' · ' + esc(m.label) +
-      ' · <span style="font-family:var(--mono)">' + esc(m.id) + '</span></div></span>';
+      ' · <span style="font-family:var(--mono)">' + esc(m.id) + '</span></div></span>');
     const wrap = document.createElement('span');
     wrap.style.cssText = 'display:flex;gap:4px';
     const ed = document.createElement('button');
@@ -1818,7 +1877,59 @@ function renderSent() {
     el.appendChild(wrap);
     box.appendChild(el);
   }
+  renderPicked();
 }
+
+/* ------------------------------------------------------------ bulk delete
+   Deleting a run of test messages one at a time means one confirmation each.
+   The bar only appears once something is ticked, so the list is unchanged for
+   anyone not using it. */
+let picked = new Set();
+
+function renderPicked() {
+  const bar = $('#sentBulk');
+  bar.style.display = picked.size ? 'flex' : 'none';
+  $('#sentPickCount').textContent = picked.size + ' selected';
+}
+
+$('#btnPickNone').onclick = () => { picked.clear(); renderSent(); };
+
+$('#btnPickDelete').onclick = async () => {
+  const list = sent.filter(m => picked.has(m.id));
+  if (!list.length) return;
+  if (!await confirmBox('Delete ' + list.length + ' message'
+                        + (list.length === 1 ? '' : 's') + ' from Discord?',
+        'They go for everyone in the channel. This cannot be undone.',
+        { ok: 'Delete ' + list.length, danger: true })) return;
+
+  const btn = $('#btnPickDelete');
+  btn.disabled = true;
+  let done = 0;
+  const failed = [];
+  for (const m of list) {
+    setStatus('info', 'Deleting ' + (done + failed.length + 1) + ' of ' + list.length + '…');
+    try {
+      await post(m.target, m.threadId, null, { op: 'delete', messageId: m.id });
+      sent = sent.filter(x => x.id !== m.id);
+      picked.delete(m.id);
+      if (editing?.id === m.id) cancelEdit();
+      done++;
+    } catch (e) {
+      /* already gone at Discord counts as done - the point was for it to not exist */
+      if (/unknown message|10008/i.test(e.message)) {
+        sent = sent.filter(x => x.id !== m.id);
+        picked.delete(m.id);
+        done++;
+      } else failed.push(m.id + ': ' + e.message);
+    }
+  }
+  btn.disabled = false;
+  saveSent(); renderSent();
+  if (SERVER.on) refreshSent();
+  setStatus(failed.length ? 'warn' : 'ok',
+    'Deleted ' + done + ' of ' + list.length + '.'
+    + (failed.length ? '\n' + failed.join('\n') : ''));
+};
 
 /* Pull the message back from Discord so the editor shows what is actually posted. */
 async function loadForEdit(m) {
@@ -1958,6 +2069,7 @@ async function lookupHook(quiet = false) {
   } finally { btn.disabled = false; }
 }
 $('#btnHookInfo').onclick = () => lookupHook();
+$('#btnCheckAll').onclick = () => checkAllHooks();
 
 $('#btnRenameHook').onclick = async () => {
   const v = await askBox({
@@ -2933,6 +3045,102 @@ $('#mdTools').addEventListener('click', ev => {
   if (b.dataset.prefix) return prefixLines(b.dataset.prefix);
 });
 
+/* ============================================================ EMOJI PICKER
+   Standard emoji only. A server's own emoji are `:name:` and belong to that
+   server, so the app has no way to list them - the hint says so rather than
+   leaving people wondering why theirs are missing. Each entry carries search
+   words, because "tick" and "check" are the same thing to different people. */
+const EMOJI = [
+  ['😀','grin smile happy'], ['😄','smile happy joy'], ['😅','sweat laugh nervous'],
+  ['😂','laugh cry tears'], ['🙂','slight smile'], ['😉','wink'], ['😊','blush smile'],
+  ['😍','love heart eyes'], ['😎','cool sunglasses'], ['🤔','think hmm'],
+  ['😐','neutral meh'], ['🙃','upside down'], ['😴','sleep tired'], ['😭','cry sob'],
+  ['😤','huff angry'], ['😡','angry rage mad'], ['🥳','party celebrate'],
+  ['😬','grimace awkward'], ['🤯','mind blown'], ['🫡','salute'],
+  ['👍','thumbsup yes good approve'], ['👎','thumbsdown no bad'], ['👏','clap applause'],
+  ['🙏','pray thanks please'], ['🤝','handshake deal'], ['👀','eyes look watch'],
+  ['💪','muscle strong'], ['🫶','heart hands love'], ['✌️','peace'], ['🤙','call shaka'],
+  ['❤️','heart love red'], ['🧡','heart orange'], ['💛','heart yellow'],
+  ['💚','heart green'], ['💙','heart blue'], ['💜','heart purple'],
+  ['🖤','heart black'], ['💔','broken heart'], ['✨','sparkles shiny new'],
+  ['🎉','party tada celebrate release'], ['🎊','confetti party'], ['🔥','fire hot lit'],
+  ['⭐','star'], ['🌟','star glowing'], ['💯','hundred perfect'], ['⚡','lightning fast zap'],
+  ['✅','tick check yes done pass'], ['❌','cross no fail wrong'],
+  ['⚠️','warning caution careful'], ['🚨','alert siren urgent'], ['❓','question'],
+  ['❗','exclamation important'], ['🛑','stop halt'], ['🔴','red circle down offline'],
+  ['🟠','orange circle'], ['🟡','yellow circle'], ['🟢','green circle up online ok'],
+  ['🔵','blue circle'], ['⚪','white circle'], ['⚫','black circle'],
+  ['📢','announce megaphone news'], ['📣','shout megaphone'], ['📌','pin important'],
+  ['📎','clip attach'], ['📝','note write memo'], ['📄','page document file'],
+  ['📅','calendar date schedule'], ['⏰','alarm clock time'], ['⏳','hourglass wait'],
+  ['🔔','bell notify'], ['🔕','bell off mute silent'], ['🔒','lock secure private'],
+  ['🔓','unlock open'], ['🔑','key access'], ['🔗','link url'],
+  ['🚀','rocket launch ship deploy'], ['🛠️','tools build fix'], ['🔧','wrench fix'],
+  ['🐛','bug issue defect'], ['💡','idea bulb tip'], ['📦','package box release'],
+  ['🖥️','desktop computer server'], ['💾','save disk floppy'], ['📊','chart stats graph'],
+  ['📈','chart up growth'], ['📉','chart down loss'], ['🗑️','bin trash delete'],
+  ['♻️','recycle retry refresh'], ['🔄','refresh sync retry loop'],
+  ['➡️','arrow right next'], ['⬅️','arrow left back'], ['⬆️','arrow up'],
+  ['⬇️','arrow down'], ['🏁','flag finish done'], ['🎯','target goal bullseye'],
+  ['🧪','test experiment lab'], ['🩹','patch fix bandaid'], ['🧹','clean sweep tidy'],
+  ['👋','wave hello bye'], ['🤖','robot bot'], ['👻','ghost'], ['🎮','game controller'],
+  ['🍕','pizza food'], ['☕','coffee tea'], ['🌙','moon night'], ['☀️','sun day']
+];
+
+function renderEmoji(filter = '') {
+  const q = filter.trim().toLowerCase();
+  const grid = $('#emojiGrid');
+  grid.innerHTML = '';
+  const hits = q ? EMOJI.filter(([, words]) => words.includes(q)
+                                || words.split(' ').some(w => w.startsWith(q)))
+                 : EMOJI;
+  if (!hits.length) {
+    const none = document.createElement('div');
+    none.className = 'none';
+    none.textContent = 'Nothing matches "' + filter.trim() + '".';
+    return grid.appendChild(none);
+  }
+  for (const [ch, words] of hits) {
+    const b = document.createElement('button');
+    b.type = 'button'; b.textContent = ch; b.title = words.split(' ')[0];
+    b.onclick = () => { insert(ch); closeEmoji(); };
+    grid.appendChild(b);
+  }
+}
+
+function closeEmoji() {
+  $('#emojiPop').style.display = 'none';
+  document.removeEventListener('mousedown', onEmojiOutside, true);
+}
+function onEmojiOutside(ev) {
+  if (!ev.target.closest('#emojiPop') && !ev.target.closest('#btnEmoji')) closeEmoji();
+}
+
+$('#btnEmoji').onclick = () => {
+  const pop = $('#emojiPop');
+  if (pop.style.display !== 'none') return closeEmoji();
+  $('#emojiSearch').value = '';
+  renderEmoji();
+  pop.style.display = '';
+  /* shrink the grid rather than run off the bottom of a short window - the
+     search box means a smaller grid still reaches everything */
+  const top = pop.getBoundingClientRect().top;
+  const room = innerHeight - top - 100;          /* less the search box and hint */
+  $('#emojiGrid').style.maxHeight = Math.max(96, Math.min(186, room)) + 'px';
+  $('#emojiSearch').focus();
+  /* capture phase, so a click on any control still closes it first */
+  document.addEventListener('mousedown', onEmojiOutside, true);
+};
+$('#emojiSearch').addEventListener('input', e => renderEmoji(e.target.value));
+$('#emojiSearch').addEventListener('keydown', ev => {
+  if (ev.key === 'Escape') { ev.stopPropagation(); closeEmoji(); ta().focus(); }
+  /* Enter takes the first match, so a search can be finished without the mouse */
+  if (ev.key === 'Enter') {
+    const first = $('#emojiGrid').querySelector('button');
+    if (first) { ev.preventDefault(); first.click(); }
+  }
+});
+
 /* Formatting keys only make sense with a caret in the message box.
    Ctrl+Enter is handled globally instead, so it works from anywhere. */
 ta().addEventListener('keydown', ev => {
@@ -3586,12 +3794,23 @@ $('#btnDelProfile').onclick = async () => {
 };
 
 /* ================================================================= WIRING */
-function setStatus(kind, text) {
+/* `action` puts a button in the message - used for "Retry", where the thing you
+   want next is right there rather than back in the composer. */
+function setStatus(kind, text, action = null) {
   const el = $('#status');
   el.className = 'status on ' + kind;
-  el.innerHTML = '<span style="white-space:pre-wrap">' + esc(text) + '</span><span class="x">✕</span>';
+  el.innerHTML = '<span style="white-space:pre-wrap">' + esc(text) + '</span>'
+    + (action ? '<button class="sm statusact"></button>' : '')
+    + '<span class="x">✕</span>';
+  if (action) {
+    const b = el.querySelector('.statusact');
+    b.textContent = action.label;
+    b.onclick = () => { el.className = 'status'; action.run(); };
+  }
   el.querySelector('.x').onclick = () => el.className = 'status';
-  if (kind === 'ok') setTimeout(() => { if (el.classList.contains('ok')) el.className = 'status'; }, 8000);
+  /* a message offering an action should wait to be dealt with */
+  if (kind === 'ok' && !action)
+    setTimeout(() => { if (el.classList.contains('ok')) el.className = 'status'; }, 8000);
 }
 
 $('#webhookUrl').addEventListener('input', e => { state.webhookUrl = e.target.value; renderAll(); });
@@ -3934,6 +4153,9 @@ function renderServerProfiles(prefer) {
     store.set('dwp.serverProfile', SERVER.profile);
   }
   $('#btnDelHook').disabled = !SERVER.profile || SERVER.locked.includes(SERVER.profile);
+  /* checking one webhook is the Look up button; this is only worth offering
+     once there are several */
+  $('#btnCheckAll').style.display = SERVER.on && SERVER.profiles.length > 1 ? '' : 'none';
   renderAlsoTargets();
   renderAll();
 }
@@ -3950,6 +4172,30 @@ function markDead(profile, gone) {
   if (gone) deadHooks.add(profile);
   if (changed) renderServerProfiles(SERVER.profile);
   return changed;
+}
+
+/* Check every saved webhook, one after another rather than all at once - each is
+   a request to Discord, and a burst of them is exactly what the rate limiter is
+   there to stop. */
+async function checkAllHooks() {
+  const btn = $('#btnCheckAll');
+  const names = SERVER.profiles.slice();
+  if (!names.length) return setStatus('info', 'No webhooks to check.');
+
+  btn.disabled = true;
+  const live = [], gone = [], unknown = [];
+  for (let i = 0; i < names.length; i++) {
+    setStatus('info', 'Checking ' + (i + 1) + ' of ' + names.length + ' - ' + names[i] + '…');
+    const verdict = await checkHook(names[i]);
+    (verdict === 'ok' ? live : verdict === 'gone' ? gone : unknown).push(names[i]);
+  }
+  btn.disabled = false;
+
+  const parts = [];
+  if (live.length) parts.push(live.length + ' live');
+  if (gone.length) parts.push(gone.length + ' missing at Discord: ' + gone.join(', '));
+  if (unknown.length) parts.push(unknown.length + ' could not be checked: ' + unknown.join(', '));
+  setStatus(gone.length ? 'warn' : unknown.length ? 'info' : 'ok', parts.join('. ') + '.');
 }
 
 async function checkHook(profile, { quiet = true } = {}) {
