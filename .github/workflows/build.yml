@@ -5,7 +5,9 @@ name: Build the exe
 # run by hand from the Actions tab.
 on:
   push:
-    tags: ['v*']
+    # both cases: these filters are case-sensitive, and a V1.0.2 tag silently
+    # matching nothing is a confusing way to get no release
+    tags: ['v*', 'V*']
     branches: [main]
     paths: ['index.html', 'server.js', 'package.json', 'build.js', 'sea-config.json',
             '.github/workflows/build.yml']
@@ -35,7 +37,7 @@ jobs:
         if: startsWith(github.ref, 'refs/tags/')
         shell: bash
         run: |
-          tag="${GITHUB_REF_NAME#v}"
+          tag="${GITHUB_REF_NAME#[vV]}"
           pkg=$(node -p "require('./package.json').version")
           echo "tag=$tag  package.json=$pkg"
           [ "$tag" = "$pkg" ] || { echo "::error::tag $GITHUB_REF_NAME does not match package.json $pkg"; exit 1; }

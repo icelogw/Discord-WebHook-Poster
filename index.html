@@ -1689,8 +1689,14 @@ async function deliver(targets, payload, files) {
   if (SERVER.on) refreshSent();            /* the log is authoritative */
 
   const good = results.filter(r => r.ok), bad = results.filter(r => !r.ok);
+  /* The payload is the one that was sent, not whatever is in the composer now -
+     this is a retry, not a resend of newer edits. The title says so, because a
+     changed composer and an unchanged retry is a confusing pair. */
   const retry = bad.length ? {
     label: bad.length > 1 ? 'Retry ' + bad.length : 'Retry',
+    title: 'Send this same message again to '
+           + (bad.length > 1 ? 'the ' + bad.length + ' webhooks that failed' : bad[0].label)
+           + '. Later edits in the composer are not included.',
     run: () => deliver(bad.map(r => r.target), payload, files)
   } : null;
 
@@ -1797,7 +1803,10 @@ async function forgetSent(entry, why) {
 }
 
 async function pingSent() {
-  if (editing || !sent.length) return;
+  /* A background tab has nobody looking at the list, and every check costs a
+     request from the same budget as sending. Two idle tabs should not eat the
+     rate limit between them. */
+  if (document.hidden || editing || !sent.length) return;
   /* take them in turn so a long list is still covered, just slowly */
   const entry = sent[pingAt++ % sent.length];
   if (!entry?.id) return;
@@ -1908,19 +1917,35 @@ $('#btnPickDelete').onclick = async () => {
   const failed = [];
   for (const m of list) {
     setStatus('info', 'Deleting ' + (done + failed.length + 1) + ' of ' + list.length + '…');
-    try {
-      await post(m.target, m.threadId, null, { op: 'delete', messageId: m.id });
-      sent = sent.filter(x => x.id !== m.id);
-      picked.delete(m.id);
-      if (editing?.id === m.id) cancelEdit();
-      done++;
-    } catch (e) {
-      /* already gone at Discord counts as done - the point was for it to not exist */
-      if (/unknown message|10008/i.test(e.message)) {
+    /* More than a handful will run into the rate limit, so wait it out rather
+       than failing the rest. post() already sleeps once on a 429; a second go
+       covers a long queue, since the limiter refills steadily. */
+    let tries = 0;
+    for (;;) {
+      try {
+        await post(m.target, m.threadId, null, { op: 'delete', messageId: m.id });
         sent = sent.filter(x => x.id !== m.id);
         picked.delete(m.id);
+        if (editing?.id === m.id) cancelEdit();
         done++;
-      } else failed.push(m.id + ': ' + e.message);
+        break;
+      } catch (e) {
+        /* already gone at Discord counts as done - the point was for it to not exist */
+        if (/unknown message|10008/i.test(e.message)) {
+          sent = sent.filter(x => x.id !== m.id);
+          picked.delete(m.id);
+          done++;
+          break;
+        }
+        if (/rate limit|429/i.test(e.message) && ++tries < 3) {
+          setStatus('info', 'Rate limited - waiting, then carrying on with '
+                            + (list.length - done - failed.length) + ' left…');
+          await new Promise(r => setTimeout(r, 5000));
+          continue;
+        }
+        failed.push(m.id + ': ' + e.message);
+        break;
+      }
     }
   }
   btn.disabled = false;
@@ -3805,6 +3830,7 @@ function setStatus(kind, text, action = null) {
   if (action) {
     const b = el.querySelector('.statusact');
     b.textContent = action.label;
+    if (action.title) b.title = action.title;
     b.onclick = () => { el.className = 'status'; action.run(); };
   }
   el.querySelector('.x').onclick = () => el.className = 'status';
@@ -4059,10 +4085,15 @@ function cmpVer(a, b) {
 function showUpdate(u) {
   const el = $('#updateBadge');
   if (!u || !u.available) { el.style.display = 'none'; return; }
-  el.textContent = 'v' + u.latest + ' available';
+  /* the exe is replaced by downloading a new one; from source it is a git pull.
+     Saying "update" without saying how leaves people looking for a button. */
+  const local = SERVER.on && SERVER.mode === 'local';
+  el.textContent = 'v' + u.latest + (local ? ' - download' : ' available');
   el.href = u.url || ('https://github.com/' + UPDATE_REPO + '/releases');
-  el.title = 'You are running v' + (u.current || APP_VERSION) +
-             '. Click to see what changed in v' + u.latest + '.';
+  el.title = 'You are running v' + (u.current || APP_VERSION) + '. '
+    + (local ? 'Download the new exe from the release page and replace this one - your .env, '
+             + 'templates and log stay where they are.'
+             : 'Update the source - git pull, or download it again - then restart the server.');
   el.style.display = '';
 }
 
@@ -4156,6 +4187,9 @@ function renderServerProfiles(prefer) {
   /* checking one webhook is the Look up button; this is only worth offering
      once there are several */
   $('#btnCheckAll').style.display = SERVER.on && SERVER.profiles.length > 1 ? '' : 'none';
+  /* a webhook that has been removed should not keep its "deleted at Discord"
+     mark, or re-adding one under the same name looks broken */
+  for (const name of [...deadHooks]) if (!SERVER.profiles.includes(name)) deadHooks.delete(name);
   renderAlsoTargets();
   renderAll();
 }

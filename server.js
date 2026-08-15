@@ -266,7 +266,14 @@ function offerUpdate(info) {
   console.log('\n  ' + CLR.warn + 'update' + CLR.off + '  v' + info.latest
               + ' is available - you have v' + info.current);
   console.log('          ' + CLR.link + info.url + CLR.off);
-  console.log('          ' + CLR.dim + 'run `git pull` to update' + CLR.off + '\n');
+  /* Neither audience can necessarily run git: the packaged app has no repository
+     at all, and source downloaded as a zip has no remote to pull from. Say what
+     is true for each instead. */
+  console.log('          ' + CLR.dim
+              + (IS_SEA ? 'download the new ' + path.basename(process.execPath)
+                          + ' and replace this one'
+                        : 'git pull, or download the source again from the link above')
+              + CLR.off + '\n');
 }
 
 /* ------------------------------------------------------------------ token */
@@ -322,6 +329,23 @@ function rateOk(ip) {
   if (b.tokens < 1) return false;
   b.tokens -= 1;
   return true;
+}
+
+/* How long until one request is allowed again. The page waits this long and
+   retries, which is what turns "delete 30 messages" from a wall of 429s into
+   something that simply takes a little over a minute. */
+function rateWait(ip) {
+  const b = buckets.get(ip);
+  const need = b ? Math.max(0, 1 - b.tokens) : 0;
+  return Math.max(1, Math.ceil((need / RATE_PER_MIN) * 60));
+}
+
+/* Every 429 answers the same way: a header for anything standard, and the same
+   number in the body because that is where the page looks. */
+function tooFast(res, ip) {
+  const wait = rateWait(ip);
+  return send(res, 429, { error: 'Rate limit reached - slow down.', retry_after: wait },
+              { 'Retry-After': String(wait) });
 }
 
 function clientIp(req) {
@@ -738,7 +762,7 @@ async function handleAddProfile(req, res, ip) {
   if (!gate(req, res, { json: true })) return;
   if (!MANAGE) return send(res, 403, {
     error: 'Managing webhooks from the browser is disabled on this server. Add WEBHOOK_ lines to .env instead.' });
-  if (!rateOk(ip)) return send(res, 429, { error: 'Rate limit reached - slow down.' }, { 'Retry-After': '30' });
+  if (!rateOk(ip)) return tooFast(res, ip);
 
   let body;
   try { body = JSON.parse(await readBody(req, 8 * 1024)); }
@@ -759,7 +783,10 @@ async function handleAddProfile(req, res, ip) {
   /* Ask Discord whether it is real before writing it down. A URL can be the right
      shape and still be dead - a typo in the token, or a webhook deleted since it
      was copied - and finding that out on your first send is too late. */
-  const check = await callDiscord(url, { method: 'GET' });
+  /* Short timeout: this is a courtesy check, and the save should not sit there
+     for fifteen seconds because Discord is slow. Timing out lands in the
+     "could not be checked" branch, which saves the webhook anyway. */
+  const check = await callDiscord(url, { method: 'GET', timeout: 6000 });
   /* callDiscord reports every upstream failure as 502 and keeps Discord's own
      code in the tag, so a dead webhook is discord-404, not status 404. */
   if (/^discord-(401|403|404)$/.test(check.tag || ''))
@@ -783,7 +810,7 @@ async function handleAddProfile(req, res, ip) {
 async function handleDeleteProfile(req, res, ip) {
   if (!gate(req, res, { json: true })) return;
   if (!MANAGE) return send(res, 403, { error: 'Managing webhooks from the browser is disabled on this server.' });
-  if (!rateOk(ip)) return send(res, 429, { error: 'Rate limit reached - slow down.' }, { 'Retry-After': '30' });
+  if (!rateOk(ip)) return tooFast(res, ip);
 
   let body;
   try { body = JSON.parse(await readBody(req, 8 * 1024)); }
@@ -806,8 +833,7 @@ async function handleDeleteProfile(req, res, ip) {
 
 async function handleSend(req, res, ip) {
   if (!gate(req, res, { json: true })) return;
-  if (!rateOk(ip))
-    return send(res, 429, { error: 'Rate limit reached - slow down.' }, { 'Retry-After': '30' });
+  if (!rateOk(ip)) return tooFast(res, ip);
 
   let body;
   try { body = JSON.parse(await readBody(req, BODY_MAX)); }
@@ -853,14 +879,14 @@ async function handleSend(req, res, ip) {
    limit, and translates the response into our own shape. */
 /* Performs the call and hands back a plain result. Used by the request handlers
    and by the scheduler, which has no HTTP response to write to. */
-async function callDiscord(url, { method = 'GET', body = null, files = null, query = {} } = {}) {
+async function callDiscord(url, { method = 'GET', body = null, files = null, query = {}, timeout = 0 } = {}) {
   const target = new URL(url);
   for (const [k, v] of Object.entries(query)) if (v != null) target.searchParams.set(k, v);
 
   for (let attempt = 0; attempt < 2; attempt++) {
     let up;
     try {
-      const init = { method, signal: AbortSignal.timeout(files?.length ? 60_000 : 15_000) };
+      const init = { method, signal: AbortSignal.timeout(timeout || (files?.length ? 60_000 : 15_000)) };
       if (files && files.length) {
         /* multipart: the payload rides along as payload_json, images as files[n].
            No Content-Type header - fetch must set its own multipart boundary. */
@@ -1072,8 +1098,30 @@ async function schedTick() {
   }
 }
 
+/* An item is written as 'sending' before the request goes out, so a second tick
+   cannot post it twice. If the process dies in that window the flag survives the
+   restart, and because only 'pending' items are ever fired the message would sit
+   there for good - never sent, never reported. Anything still 'sending' at
+   startup was interrupted, so say so.
+
+   It is deliberately not retried: the server has no way to know whether Discord
+   accepted the message before the process went down, and posting an announcement
+   twice is worse than telling someone to check the channel. */
+function schedRecover() {
+  for (const item of schedLoad()) {
+    if (item.status !== 'sending') continue;
+    item.status = 'failed';
+    item.error = 'The server stopped while this was being sent. It may or may not have gone out '
+               + '- check the channel before sending it again.';
+    schedWrite(item);
+    log('scheduler', 'interrupted', item.profile, item.id);
+    logEvent('scheduled-interrupted', { profile: item.profile, id: item.id, summary: item.summary });
+  }
+}
+
 function schedStart() {
   if (!SCHEDULING) return;
+  schedRecover();
   schedTick().catch(() => {});
   schedTimer = setInterval(() => schedTick().catch(() => {}), 15_000);
   schedTimer.unref();
@@ -1153,7 +1201,7 @@ async function handleScheduleList(req, res) {
 async function handleScheduleCreate(req, res, ip) {
   if (!gate(req, res, { json: true })) return;
   if (!SCHEDULING) return schedOff(res);
-  if (!rateOk(ip)) return send(res, 429, { error: 'Rate limit reached - slow down.' }, { 'Retry-After': '30' });
+  if (!rateOk(ip)) return tooFast(res, ip);
 
   let body;
   try { body = JSON.parse(await readBody(req, BODY_MAX)); }
@@ -1312,7 +1360,7 @@ async function handleTemplateList(req, res) {
 
 async function handleTemplateSave(req, res, ip) {
   if (!gate(req, res, { json: true })) return;
-  if (!rateOk(ip)) return send(res, 429, { error: 'Rate limit reached - slow down.' }, { 'Retry-After': '30' });
+  if (!rateOk(ip)) return tooFast(res, ip);
 
   let body;
   try { body = JSON.parse(await readBody(req, BODY_MAX)); }
@@ -1378,7 +1426,7 @@ async function handleTemplateDelete(req, res, ip) {
 
 async function handleMessage(req, res, ip, action) {
   if (!gate(req, res, { json: true })) return;
-  if (!rateOk(ip)) return send(res, 429, { error: 'Rate limit reached - slow down.' }, { 'Retry-After': '30' });
+  if (!rateOk(ip)) return tooFast(res, ip);
 
   let body;
   try { body = JSON.parse(await readBody(req, BODY_MAX)); }
@@ -1424,7 +1472,7 @@ async function handleMessage(req, res, ip, action) {
 /* ----------------------------------------------------- the webhook itself */
 async function handleWebhookInfo(req, res, ip, url) {
   if (!gate(req, res)) return;
-  if (!rateOk(ip)) return send(res, 429, { error: 'Rate limit reached - slow down.' }, { 'Retry-After': '30' });
+  if (!rateOk(ip)) return tooFast(res, ip);
   const name = url.searchParams.get('profile') || '';
   const entry = profiles.get(name);
   if (!entry) return send(res, 400, { error: 'Unknown webhook profile.' });
@@ -1433,7 +1481,7 @@ async function handleWebhookInfo(req, res, ip, url) {
 
 async function handleWebhookRename(req, res, ip) {
   if (!gate(req, res, { json: true })) return;
-  if (!rateOk(ip)) return send(res, 429, { error: 'Rate limit reached - slow down.' }, { 'Retry-After': '30' });
+  if (!rateOk(ip)) return tooFast(res, ip);
 
   let body;
   try { body = JSON.parse(await readBody(req, 8 * 1024)); }
@@ -1458,7 +1506,7 @@ const AVATAR_TYPES = ['image/png', 'image/jpeg', 'image/gif'];
 
 async function handleWebhookAvatar(req, res, ip) {
   if (!gate(req, res, { json: true })) return;
-  if (!rateOk(ip)) return send(res, 429, { error: 'Rate limit reached - slow down.' }, { 'Retry-After': '30' });
+  if (!rateOk(ip)) return tooFast(res, ip);
 
   let body;
   try { body = JSON.parse(await readBody(req, BODY_MAX)); }
@@ -1502,7 +1550,7 @@ async function handleWebhookAvatar(req, res, ip) {
 async function handleWebhookRevoke(req, res, ip) {
   if (!gate(req, res, { json: true })) return;
   if (!MANAGE) return send(res, 403, { error: 'Revoking webhooks is disabled on this server.' });
-  if (!rateOk(ip)) return send(res, 429, { error: 'Rate limit reached - slow down.' }, { 'Retry-After': '30' });
+  if (!rateOk(ip)) return tooFast(res, ip);
 
   let body;
   try { body = JSON.parse(await readBody(req, 8 * 1024)); }
