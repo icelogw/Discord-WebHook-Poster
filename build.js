@@ -19,6 +19,7 @@ const BUILD  = path.join(ROOT, 'build');
 const CONFIG = path.join(ROOT, 'sea-config.json');
 const BLOB   = path.join(BUILD, 'sea-prep.blob');
 const WIN    = process.platform === 'win32';
+const MAC    = process.platform === 'darwin';
 const NAME   = 'DiscordWebhookPoster' + (WIN ? '.exe' : '');
 const ICON   = path.join(ROOT, 'icon.ico');
 /* the same version the app reports, so the file properties cannot disagree
@@ -83,6 +84,20 @@ for (const f of ['server.js', 'index.html', 'package.json', 'sea-config.json'])
     process.exit(1);
   }
 
+/* index.html carries its own copy of the version for the case where it is opened
+   with no server to ask. Nothing keeps the two in step by itself, and a stale
+   one makes the page announce an update that is already installed - so refuse to
+   build rather than ship the mismatch. */
+const pageVersion = (fs.readFileSync(path.join(ROOT, 'index.html'), 'utf8')
+                       .match(/const APP_VERSION = '([^']+)'/) || [])[1];
+if (pageVersion !== VERSION) {
+  console.error('\n  Version mismatch:');
+  console.error('    package.json  ' + VERSION);
+  console.error('    index.html    ' + (pageVersion || 'not found (APP_VERSION missing)'));
+  console.error('\n  Set APP_VERSION in index.html to ' + VERSION + ' and build again.\n');
+  process.exit(1);
+}
+
 console.log('\n  Building a single-file executable');
 console.log('  ' + '─'.repeat(52));
 console.log('  node    ' + process.versions.node + ' (' + process.platform + '/' + process.arch + ')');
@@ -111,6 +126,19 @@ if (WIN) {
     console.log('  sig     removed the inherited Authenticode signature');
   } catch {
     console.log('  sig     signtool not available; the copied signature stays invalid (harmless)');
+  }
+}
+
+/* macOS is stricter than cosmetic: an Apple-silicon binary with a broken
+   signature will not run at all, so the inherited one has to come off before
+   injection and an ad-hoc one go on afterwards. Ad-hoc is not notarisation -
+   Gatekeeper will still warn on download - but the file at least starts. */
+if (MAC) {
+  try {
+    run('codesign', ['--remove-signature', STAGE], { stdio: 'ignore' });
+    console.log('  sig     removed the inherited signature');
+  } catch {
+    console.log('  sig     codesign not available; continuing');
   }
 }
 
@@ -145,8 +173,18 @@ if (WIN) {
 /* ---------------------------------------------------------------- inject */
 step('Injecting the blob with postject');
 const args = [STAGE, 'NODE_SEA_BLOB', BLOB, '--sentinel-fuse', FUSE];
-if (process.platform === 'darwin') args.push('--macho-segment-name', 'NODE_SEA');
+if (MAC) args.push('--macho-segment-name', 'NODE_SEA');
 npx(['--yes', 'postject', ...args]);
+
+/* Re-sign after injection, or Apple silicon refuses to execute it at all. */
+if (MAC) {
+  try {
+    run('codesign', ['--sign', '-', STAGE], { stdio: 'ignore' });
+    console.log('  sig     signed ad-hoc so it will run locally');
+  } catch {
+    console.log('  sig     could not re-sign; the binary may not start on Apple silicon');
+  }
+}
 
 /* ----------------------------------------------------------------- verify
    Actually run the thing: boot it on a spare port and fetch the page, which

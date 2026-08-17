@@ -26,13 +26,24 @@ in to anything, and the app has no account of its own either.
 ## Download
 
 **[Download the latest release](https://github.com/icelogw/Discord-WebHook-Poster/releases/latest)**
-and take `DiscordWebhookPoster.exe` from it - one file, ~67 MB, **no Node required**. Put it in a
-folder you can write to and double-click. It starts the proxy server, opens your browser, and
-creates its own `.env` beside itself on first run.
+and take the file for your machine - one file, ~67 MB, **no Node required**. Put it in a folder you
+can write to and run it. It starts the proxy server, opens your browser, and creates its own `.env`
+beside itself on first run.
 
-Most of that size is the Node runtime; the app itself is under 200 KB.
+| File | For |
+|---|---|
+| `DiscordWebhookPoster.exe` | Windows |
+| `DiscordWebhookPoster-linux-x64` | Linux |
+| `DiscordWebhookPoster-macos-arm64` | macOS, Apple silicon |
+| `DiscordWebhookPoster-macos-x64` | macOS, Intel |
 
-> Windows SmartScreen will warn the first time - the exe is unsigned. *More info* → *Run anyway*.
+Most of that size is the Node runtime; the app itself is under 200 KB. Every release binary is
+built by GitHub Actions from the tagged commit, so what you download corresponds to the source
+here and the build log is public under **Actions**.
+
+> Windows SmartScreen will warn the first time - the binaries are unsigned. *More info* →
+> *Run anyway*. On macOS, Gatekeeper will object for the same reason: right-click → *Open*, or
+> `xattr -d com.apple.quarantine <file>`. On Linux, `chmod +x` it first.
 
 ---
 
@@ -117,6 +128,33 @@ WEBHOOK_DEPLOY_LOG=https://discord.com/api/webhooks/…      # → "deploy-log"
 Editing the file by hand needs a restart; adding from the page takes effect immediately. Webhooks
 supplied as real environment variables rather than `.env` show as *(from environment)* and can't be
 changed from the page - the server can't persist a change it doesn't own.
+
+### Keeping track of them
+
+**Look up** fetches one webhook's real name, avatar and channel from Discord. **Check all** does the
+same for every saved webhook, one at a time so it can't trip the rate limit, and reports which ones
+Discord no longer recognises - those are marked *(deleted at Discord)* in the dropdown until they
+work again. The same check runs quietly when the page opens and whenever you switch webhook, and a
+send that fails with *Unknown Webhook* marks it immediately, since that is proof in itself.
+
+Underneath the picker is a usage line - *"41 messages sent, last 3 days ago"* - read straight back
+out of the log. Nothing extra is stored to produce it: every send already records which webhook it
+went to. It answers the question you actually have about an old webhook, which is whether anything
+still uses it.
+
+### Per-webhook defaults
+
+**Defaults…** saves an identity against a webhook, applied automatically whenever you pick it - so
+posting to `alerts` always looks like your alerts bot without setting it up each time. The username
+and avatar come from the dialog; the silent, link preview and mention settings are taken from what
+you have composed at that moment, so they're set in the normal place rather than described twice.
+
+Only the fields you saved are applied, so a webhook with just a username set will not quietly reset
+your mention rules. They live in `templates.json`'s neighbour, `webhook-defaults.json`, next to the
+app - never the webhook URL itself, which stays in `.env`.
+
+Switching to a webhook that has no defaults leaves the current identity alone rather than clearing
+it, so check the **Post as** field if you have been moving between webhooks.
 
 ### Configuration
 
@@ -208,6 +246,9 @@ Note the file holds what you sent, so treat it like `.env` - it's gitignored for
 
 - **Markdown toolbar** - bold, italic, underline, strikethrough, spoiler, inline code, code blocks,
   quotes, `H1`–`H3`, subtext, bullet and numbered lists, masked links.
+- **Emoji picker** - searchable by what things are called rather than their official names, so
+  `tick` finds ✅ and `zap` finds ⚡. Enter takes the first match. A server's own emoji are
+  `:name:` typed straight into the message, which no app can list for you.
 - **Undo/redo across the whole message** - `Ctrl+Z` / `Ctrl+Shift+Z`. See below.
 - **Timestamps** - pick a moment, see all seven Discord formats (`t T d D f F R`) rendered live,
   click one to insert its `<t:1700000000:F>` code. Discord shows these in each viewer's own timezone.
@@ -226,7 +267,8 @@ Note the file holds what you sent, so treat it like `.env` - it's gitignored for
 - **Image upload** - every image field (gallery items, section thumbnails, embed image and
   thumbnail) takes a URL *or* a file from your machine. See below.
 - **Edit and delete after sending** - every sent message is remembered with its ID; load one back,
-  change it and save in place, or delete it from the channel.
+  change it and save in place, or delete it from the channel. Tick several and delete them together;
+  anything Discord says is already gone counts as done rather than failing.
 - **Webhook details** - look up the webhook's real name, avatar and channel; rename it, change or
   remove its picture, or delete it permanently. That picture is the webhook's own, as distinct from
   the per-message avatar override.
@@ -243,8 +285,9 @@ Note the file holds what you sent, so treat it like `.env` - it's gitignored for
   Opened straight off disk with no server at all, they fall back to browser storage.
 - **Several webhooks at once** - tick any of your other saved webhooks under **Also send to** and
   the same message goes to each. They are sent one at a time, so a dead webhook costs only its own
-  send; the result says how many got through and names any that did not. Scheduling fans out the
-  same way, one queue entry per target, so each can be cancelled on its own.
+  send; the result says how many got through and names any that did not, and offers **Retry** for
+  just those - pressing Send again would post a second copy to the ones that worked. Scheduling
+  fans out the same way, one queue entry per target, so each can be cancelled on its own.
 
 <img src="https://github.com/icelogw/Discord-WebHook-Poster/raw/main/docs/also-send-to.png" alt="The Webhook card in server mode: a Post to dropdown naming the primary webhook, and an Also send to row of checkboxes for the others" width="760">
 
@@ -328,6 +371,10 @@ attachments and referenced internally as `attachment://filename`; you never have
   late; the grace window is `SCHEDULE_GRACE_MIN`. A *recurring* one skips the occurrences it slept
   through and simply resumes at the next one, so a weekend of downtime does not produce a burst of
   backdated messages.
+- **A scheduled message interrupted mid-send is reported, not retried.** If the server stops during
+  the moment it is talking to Discord, that message comes back marked failed, saying it may or may
+  not have gone out. It is deliberately not resent: nothing can tell whether Discord accepted it
+  before the process died, and posting an announcement twice cannot be undone - check the channel.
 - **Images only, no other file types** - no logs, archives or documents, and no `File`
   component. That was a deliberate scope choice, not a Discord restriction.
 - **Webhook pictures must be PNG, JPEG or GIF**, up to 8 MB - Discord takes them inline as image

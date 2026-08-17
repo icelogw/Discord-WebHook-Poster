@@ -230,6 +230,40 @@
   .status .statusact + .x{margin-left:0}
   .status .x:hover{opacity:1}
 
+  /* The main status line is a toast in the top right, so a failure is seen
+     wherever you are on the page - it used to sit in the Send card, which is off
+     screen while you are composing. Scoped to the id: the same classes are used
+     inline inside dialogs, and those must stay where they are. */
+  #status{position:fixed;top:60px;right:16px;z-index:70;
+          width:max-content;max-width:min(480px,calc(100vw - 32px));
+          font-size:14.5px;padding:13px 15px;gap:11px;
+          box-shadow:0 12px 34px #0009;animation:toast .16s ease-out;
+          transition:opacity .45s ease,transform .45s ease}
+  /* a failure has to carry across the room: heavier border, and the first line
+     reads as a headline rather than as prose */
+  #status.err,#status.warn{border-width:2px;font-weight:600}
+  #status .x{font-size:16px}
+  #status.fading{opacity:0;transform:translateY(-6px);pointer-events:none}
+  /* the countdown: a bar that drains for exactly as long as the message has
+     left, so its disappearing is never a surprise. Paused while hovered, which
+     is also when the timer behind it is paused. */
+  #status{overflow:hidden}
+  #status .bar{position:absolute;left:0;bottom:0;height:3px;width:100%;
+               background:currentColor;opacity:.4;transform-origin:left;
+               animation:statusbar linear forwards}
+  #status:hover .bar{animation-play-state:paused}
+  @keyframes statusbar{from{transform:scaleX(1)}to{transform:scaleX(0)}}
+  /* opaque versions of the tints: translucent ones only read correctly against a
+     card, and floating over the page they would show whatever is underneath */
+  #status.ok  {background:#1e3a2b}
+  #status.err {background:#3b2327}
+  #status.info{background:#272b4c}
+  #status.warn{background:#3a3122}
+  @keyframes toast{from{opacity:0;transform:translateY(-6px)}to{opacity:1;transform:none}}
+  @media (max-width:560px){
+    #status{top:auto;bottom:12px;right:12px;left:12px;max-width:none;width:auto}
+  }
+
   .q{display:flex;flex-direction:column;gap:8px}
   .q-item{display:flex;align-items:center;gap:10px;background:var(--bg3);border:1px solid var(--line);
           border-radius:6px;padding:9px 11px;font-size:13px}
@@ -426,9 +460,11 @@
             </label>
             <div style="display:flex;gap:6px;align-items:flex-end;flex:0 0 auto" id="serverManage">
               <button class="sm ctl" id="btnAddHook" title="Add a webhook URL to the server">+ Add</button>
+              <button class="sm ctl" id="btnHookDefaults" title="Identity and mention settings applied whenever this webhook is picked">Defaults…</button>
               <button class="sm ctl danger" id="btnDelHook" title="Remove the selected webhook from the server">Remove</button>
             </div>
           </div>
+          <div class="hint" id="hookUsage" style="display:none"></div>
           <!-- the box hugs its checkboxes; the explanation sits outside so a long
                sentence cannot stretch it across the card -->
           <fieldset id="alsoBox" style="display:none">
@@ -1686,7 +1722,7 @@ async function deliver(targets, payload, files) {
       results.push({ target, label, ok: false, err: friendlyErr(e.message) });
     }
   }
-  if (SERVER.on) refreshSent();            /* the log is authoritative */
+  if (SERVER.on) { refreshSent(); refreshUsage(); }   /* both come from the log */
 
   const good = results.filter(r => r.ok), bad = results.filter(r => !r.ok);
   /* The payload is the one that was sent, not whatever is in the composer now -
@@ -3819,10 +3855,35 @@ $('#btnDelProfile').onclick = async () => {
 };
 
 /* ================================================================= WIRING */
+/* How long each kind stays before fading. A success can go quickly; a failure
+   is the thing you came back to read, so it lingers. Anything offering an action
+   waits to be dealt with. */
+const STATUS_LIFE = { ok: 3500, info: 4000, warn: 5500, err: 6000 };
+let statusTimer = null, statusFade = null;
+
+function hideStatus(el) {
+  el.classList.add('fading');
+  statusFade = setTimeout(() => { el.className = 'status'; }, 450);
+}
+
+/* Start the countdown and the bar that shows it, together. Replacing the element
+   rather than restyling it is what restarts the animation - a changed duration
+   on the same node is ignored until it finishes. */
+function armStatus(el, ms) {
+  clearTimeout(statusTimer);
+  el.querySelector('.bar')?.remove();
+  const bar = document.createElement('span');
+  bar.className = 'bar';
+  bar.style.animationDuration = ms + 'ms';
+  el.appendChild(bar);
+  statusTimer = setTimeout(() => hideStatus(el), ms);
+}
+
 /* `action` puts a button in the message - used for "Retry", where the thing you
    want next is right there rather than back in the composer. */
 function setStatus(kind, text, action = null) {
   const el = $('#status');
+  clearTimeout(statusTimer); clearTimeout(statusFade);
   el.className = 'status on ' + kind;
   el.innerHTML = '<span style="white-space:pre-wrap">' + esc(text) + '</span>'
     + (action ? '<button class="sm statusact"></button>' : '')
@@ -3834,9 +3895,18 @@ function setStatus(kind, text, action = null) {
     b.onclick = () => { el.className = 'status'; action.run(); };
   }
   el.querySelector('.x').onclick = () => el.className = 'status';
-  /* a message offering an action should wait to be dealt with */
-  if (kind === 'ok' && !action)
-    setTimeout(() => { if (el.classList.contains('ok')) el.className = 'status'; }, 8000);
+
+  /* a message offering an action waits to be dealt with; everything else fades */
+  if (!action) armStatus(el, STATUS_LIFE[kind] || 6000);
+
+  /* reading a long failure should not be a race against the timer - the bar
+     pauses with it, via :hover in the stylesheet */
+  el.onmouseenter = () => { clearTimeout(statusTimer); clearTimeout(statusFade);
+                            el.classList.remove('fading'); };
+  el.onmouseleave = () => {
+    if (action || !el.classList.contains('on')) return;
+    armStatus(el, 2500);          /* a short grace once the pointer leaves */
+  };
 }
 
 $('#webhookUrl').addEventListener('input', e => { state.webhookUrl = e.target.value; renderAll(); });
@@ -4070,7 +4140,11 @@ $('#preview').addEventListener('error', ev => {
    Every failure path is silent: a private repo answers 404, and that is not
    something to bother anyone about. */
 const UPDATE_REPO = 'icelogw/Discord-WebHook-Poster';
-const APP_VERSION = '1.0.0';               /* kept in step with package.json */
+/* Only used when the page is opened straight off disk - with a server behind it
+   the version comes from /api/config, which reads package.json. The build
+   refuses to run if this and package.json disagree, because a stale value here
+   made the page report every release since as an available update. */
+const APP_VERSION = '1.0.3';
 
 function cmpVer(a, b) {
   const parts = v => String(v).replace(/^v/i, '').split('-')[0].split('.').map(n => parseInt(n, 10) || 0);
@@ -4194,6 +4268,126 @@ function renderServerProfiles(prefer) {
   renderAll();
 }
 
+/* ================================================= USAGE AND PER-WEBHOOK DEFAULTS
+   Usage is read back out of the server's log - every send already records which
+   webhook it went to, so nothing extra is stored to answer "is this one still
+   in use?". Defaults are the opposite: settings the page saves against a webhook
+   so posting to it always looks the same. */
+let usage = {};
+let hookDefaults = {};
+
+async function refreshUsage() {
+  if (!SERVER.on) return;
+  try {
+    const res = await api('api/usage');
+    if (!res.ok) return;
+    const d = await res.json();
+    usage = d.usage || {};
+    renderUsage();
+  } catch { /* not worth a message - this is a detail line */ }
+}
+
+const AGO = ms => {
+  const m = Math.round(ms / 60000);
+  if (m < 1) return 'just now';
+  if (m < 60) return m + ' minute' + (m === 1 ? '' : 's') + ' ago';
+  const h = Math.round(m / 60);
+  if (h < 24) return h + ' hour' + (h === 1 ? '' : 's') + ' ago';
+  const d = Math.round(h / 24);
+  return d + ' day' + (d === 1 ? '' : 's') + ' ago';
+};
+
+function renderUsage() {
+  const el = $('#hookUsage');
+  if (!el) return;
+  const u = usage[SERVER.profile];
+  const parts = [];
+  if (u) parts.push(u.count + ' message' + (u.count === 1 ? '' : 's') + ' sent, last '
+                    + AGO(Date.now() - Date.parse(u.last)));
+  else if (SERVER.on && SERVER.profile) parts.push('Nothing sent through this one yet.');
+  const d = hookDefaults[SERVER.profile];
+  if (d) {
+    const bits = [];
+    if (d.username) bits.push('posts as "' + d.username + '"');
+    if (d.avatarUrl) bits.push('custom avatar');
+    if (d.mentions) bits.push('mention rules');
+    if (d.silent) bits.push('silent');
+    if (d.suppressEmbeds) bits.push('no link previews');
+    if (bits.length) parts.push('Defaults: ' + bits.join(', ') + '.');
+  }
+  el.textContent = parts.join(' ');
+  el.style.display = parts.length ? '' : 'none';
+}
+
+async function refreshDefaults() {
+  if (!SERVER.on) return;
+  try {
+    const res = await api('api/defaults');
+    if (!res.ok) return;
+    hookDefaults = (await res.json()).defaults || {};
+    renderUsage();
+  } catch { /* leave what is on screen */ }
+}
+
+/* Applied when you pick a webhook, so "post to alerts" also means "as the alerts
+   bot". Only the fields that were saved are touched - a webhook with just a
+   username set will not silently reset your mention rules. */
+function applyDefaults(profile, { announce = true } = {}) {
+  const d = hookDefaults[profile];
+  if (!d) return false;
+  if ('username' in d) state.username = d.username;
+  if ('avatarUrl' in d) state.avatarUrl = d.avatarUrl;
+  if ('mentions' in d) state.mentions = { ...state.mentions, ...d.mentions };
+  if ('silent' in d) state.silent = d.silent;
+  if ('suppressEmbeds' in d) state.suppressEmbeds = d.suppressEmbeds;
+  syncFields(); renderAll();
+  if (announce) setStatus('info', 'Applied the saved defaults for "' + profile + '".');
+  return true;
+}
+
+$('#btnHookDefaults').onclick = async () => {
+  const profile = SERVER.profile;
+  if (!profile) return setStatus('err', 'Pick a webhook first.');
+  const cur = hookDefaults[profile] || {};
+  const v = await askBox({
+    title: 'Defaults for "' + profile + '"',
+    body: 'Applied whenever you pick this webhook. Leave a field empty to not set it. '
+        + 'These are settings, not the webhook URL - that stays in .env.',
+    ok: 'Save',
+    fields: [
+      { name: 'username', label: 'Post as', value: cur.username || '',
+        placeholder: 'Leave empty to use the webhook\'s own name' },
+      { name: 'avatarUrl', label: 'Avatar URL', value: cur.avatarUrl || '',
+        placeholder: 'https://…', hint: 'Must be a URL Discord can fetch.' }
+    ],
+    validate: f => f.username && f.username.length > 80 ? 'A username is at most 80 characters.'
+             : f.avatarUrl && !/^https?:\/\//i.test(f.avatarUrl) ? 'An avatar must be an http(s) URL.'
+             : null
+  });
+  if (!v) return;
+
+  /* the switches come from what is composed now - setting them in the dialog as
+     well would be two places to say the same thing */
+  const body = { profile, defaults: {
+    username: v.username, avatarUrl: v.avatarUrl,
+    silent: state.silent, suppressEmbeds: state.suppressEmbeds,
+    mentions: state.mentions.mode === 'default' ? null : state.mentions
+  } };
+  try {
+    const res = await api('api/defaults', { method: 'POST', body: JSON.stringify(body) });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) return setStatus('err', data.error || 'Server returned ' + res.status);
+    hookDefaults = data.defaults || {};
+    renderUsage();
+    setStatus('ok', Object.keys(hookDefaults[profile] || {}).length
+      ? 'Saved defaults for "' + profile + '". They include the current silent, link preview '
+        + 'and mention settings.'
+      : 'Cleared the defaults for "' + profile + '".');
+  } catch {
+    setStatus('err', 'Could not reach the server.');
+  }
+};
+
 /* Webhooks Discord no longer recognises. A webhook deleted in Discord stays in
    .env, so without this the app would keep offering it and only fail at send
    time. Checked quietly when the page opens and whenever you switch webhook -
@@ -4304,6 +4498,10 @@ function enterServerMode(cfg) {
   SERVER.mode       = cfg.mode === 'local' ? 'local' : 'server';
   applyScheduling();
   refreshTemplates();               /* the file is authoritative once there is one */
+  /* defaults before usage: the first render should show both together, and the
+     defaults are what the composer starts from */
+  refreshDefaults().then(() => applyDefaults(SERVER.profile, { announce: false }));
+  refreshUsage();
   checkHook(SERVER.profile);        /* it may have been deleted at Discord since last time */
   if (cfg.uploadMaxMb) uploadMaxMb = cfg.uploadMaxMb;   /* server decides the real cap */
   showUpdate(cfg.update);                               /* the server already asked GitHub */
@@ -4327,6 +4525,8 @@ function enterServerMode(cfg) {
        when this one changes - otherwise it keeps excluding the previous pick */
     renderAlsoTargets();
     renderAll();
+    applyDefaults(SERVER.profile);    /* post as whatever this webhook is set to */
+    renderUsage();
     checkHook(SERVER.profile);        /* is this one still there? */
   };
   renderServerProfiles();

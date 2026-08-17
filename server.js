@@ -1192,6 +1192,26 @@ async function handleForget(req, res, ip) {
   return send(res, 200, { ok: true });
 }
 
+/* Per-webhook usage, read straight back out of the log. Nothing extra is stored:
+   every send already records which webhook it went to, so this is a count and
+   the newest timestamp per profile. Bounded scan, because the log can be 5 MB
+   and this runs on page load. */
+async function handleUsage(req, res) {
+  if (!gate(req, res)) return;
+  if (!LOG_ON) return send(res, 200, { ok: true, logging: false, usage: {} });
+
+  const rows = logRead(r => r.kind === 'send' && r.profile, 4000);
+  const usage = {};
+  for (const r of rows) {                     /* newest first, so the first wins */
+    const u = usage[r.profile] || (usage[r.profile] = { count: 0, last: null });
+    u.count++;
+    if (!u.last) u.last = r.t;
+  }
+  /* Say when the count is only what the scan reached, so "41 sent" is never
+     quietly wrong on a long-running server. */
+  return send(res, 200, { ok: true, logging: true, usage, capped: rows.length >= 4000 });
+}
+
 async function handleScheduleList(req, res) {
   if (!gate(req, res)) return;
   if (!SCHEDULING) return schedOff(res);
@@ -1351,6 +1371,82 @@ function tplWrite(list) {
   const tmp = TPL_FILE + '.tmp';
   fs.writeFileSync(tmp, JSON.stringify(list, null, 2), { mode: 0o600 });
   fs.renameSync(tmp, TPL_FILE);   /* rename is atomic - no half-written file */
+}
+
+/* ---------------------------------------------------- per-webhook defaults
+   Identity and mention settings remembered against a webhook, so posting to
+   "alerts" always looks like your alerts bot. Kept beside the templates rather
+   than in .env: .env holds credentials, and these are preferences a page is
+   allowed to change. The webhook URL is never part of this. */
+const DEF_FILE = path.join(ROOT, 'webhook-defaults.json');
+const DEF_FILE_MAX = 256 * 1024;
+
+function defLoad() {
+  try {
+    const j = JSON.parse(fs.readFileSync(DEF_FILE, 'utf8'));
+    return j && typeof j === 'object' && !Array.isArray(j) ? j : {};
+  } catch { return {}; }
+}
+
+function defWrite(map) {
+  const tmp = DEF_FILE + '.tmp';
+  fs.writeFileSync(tmp, JSON.stringify(map, null, 2), { mode: 0o600 });
+  fs.renameSync(tmp, DEF_FILE);
+}
+
+/* Only the fields the composer actually applies, each capped at what Discord
+   accepts, so a modified client cannot store junk for the next person to load. */
+function cleanDefaults(d) {
+  const out = {};
+  const name = str(d.username).trim();
+  if (name) out.username = name.slice(0, 80);
+  const av = str(d.avatarUrl).trim();
+  if (av && okUrl(av)) out.avatarUrl = av.slice(0, 2048);
+  if (d.mentions && typeof d.mentions === 'object') {
+    const m = d.mentions;
+    const mode = ['default', 'none', 'custom'].includes(m.mode) ? m.mode : 'default';
+    if (mode !== 'default') {
+      out.mentions = { mode, everyone: !!m.everyone,
+                       roleIds: str(m.roleIds).slice(0, 500),
+                       userIds: str(m.userIds).slice(0, 500) };
+    }
+  }
+  if (typeof d.silent === 'boolean' && d.silent) out.silent = true;
+  if (typeof d.suppressEmbeds === 'boolean' && d.suppressEmbeds) out.suppressEmbeds = true;
+  return out;
+}
+
+async function handleDefaultsList(req, res) {
+  if (!gate(req, res)) return;
+  return send(res, 200, { ok: true, defaults: defLoad() });
+}
+
+async function handleDefaultsSave(req, res, ip) {
+  if (!gate(req, res, { json: true })) return;
+  if (!rateOk(ip)) return tooFast(res, ip);
+
+  let body;
+  try { body = JSON.parse(await readBody(req, 32 * 1024)); }
+  catch { if (req.socket.destroyed) return; return send(res, 400, { error: 'Could not read the request body.' }); }
+
+  const profile = String(body.profile || '').trim();
+  if (!profiles.has(profile)) return send(res, 400, { error: 'Unknown webhook profile.' });
+
+  const map = defLoad();
+  const clean = cleanDefaults(body.defaults || {});
+  /* an empty set means "no defaults", which is a removal rather than a blank entry */
+  if (Object.keys(clean).length) map[profile] = clean;
+  else delete map[profile];
+
+  if (JSON.stringify(map).length > DEF_FILE_MAX)
+    return send(res, 400, { error: 'Too many webhook defaults stored.' });
+
+  try { defWrite(map); }
+  catch (e) { return send(res, 500, { error: 'Could not save: ' + e.message }); }
+
+  log(ip, 'defaults', (Object.keys(clean).length ? 'saved ' : 'cleared ') + profile);
+  logEvent('webhook-defaults', { profile, cleared: !Object.keys(clean).length });
+  return send(res, 200, { ok: true, defaults: map });
 }
 
 async function handleTemplateList(req, res) {
@@ -1678,6 +1774,10 @@ const server = http.createServer(async (req, res) => {
     if (req.method === 'GET'  && route === '/api/schedule')        return handleScheduleList(req, res);
     if (req.method === 'POST' && route === '/api/schedule')        return handleScheduleCreate(req, res, ip);
     if (req.method === 'POST' && route === '/api/schedule/delete') return handleScheduleDelete(req, res, ip);
+
+    if (req.method === 'GET'  && route === '/api/usage')            return handleUsage(req, res);
+    if (req.method === 'GET'  && route === '/api/defaults')         return handleDefaultsList(req, res);
+    if (req.method === 'POST' && route === '/api/defaults')         return handleDefaultsSave(req, res, ip);
 
     if (req.method === 'GET'  && route === '/api/templates')        return handleTemplateList(req, res);
     if (req.method === 'POST' && route === '/api/templates')        return handleTemplateSave(req, res, ip);

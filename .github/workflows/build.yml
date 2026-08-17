@@ -1,33 +1,49 @@
 name: Build the exe
 
-# Pushing a v* tag builds the executable and attaches it to that tag's release.
-# Pushing a change to the app itself just proves it still builds. It can also be
-# run by hand from the Actions tab.
+# Pushing a v* tag builds a binary on each platform and attaches them to that
+# tag's release. Pushing a change to the app just proves it still builds
+# everywhere. It can also be run by hand from the Actions tab.
 on:
   push:
-    # both cases: these filters are case-sensitive, and a V1.0.2 tag silently
-    # matching nothing is a confusing way to get no release
-    tags: ['v*', 'V*']
+    tags: ['[vV]*']
     branches: [main]
     paths: ['index.html', 'server.js', 'package.json', 'build.js', 'sea-config.json',
-            '.github/workflows/build.yml']
+            'icon.ico', '.github/workflows/build.yml']
   workflow_dispatch:
 
 jobs:
   build:
-    runs-on: windows-latest          # a Windows exe needs a Windows node binary to bundle
+    strategy:
+      fail-fast: false          # a broken macOS build should not hide a good Windows one
+      matrix:
+        include:
+          - os: windows-latest
+            asset: DiscordWebhookPoster.exe
+            built: DiscordWebhookPoster.exe
+          - os: ubuntu-latest
+            asset: DiscordWebhookPoster-linux-x64
+            built: DiscordWebhookPoster
+          - os: macos-latest     # Apple silicon
+            asset: DiscordWebhookPoster-macos-arm64
+            built: DiscordWebhookPoster
+          - os: macos-13         # the last Intel runner
+            asset: DiscordWebhookPoster-macos-x64
+            built: DiscordWebhookPoster
+
+    name: ${{ matrix.asset }}
+    runs-on: ${{ matrix.os }}
     permissions:
-      contents: write                # only used to upload the asset to a release
+      contents: write           # only used to upload the asset to a release
 
     steps:
       - uses: actions/checkout@v4
 
       - uses: actions/setup-node@v4
         with:
-          node-version: '20'         # SEA needs 20.12+; build.js checks and says so
+          node-version: '20'    # SEA needs 20.12+; build.js checks and says so
 
-      # No npm install: there are no dependencies. postject is fetched by npx
-      # inside build.js, which is the only thing the build needs from the network.
+      # No npm install: there are no dependencies. postject and rcedit are
+      # fetched by build.js, which is the only thing the build needs online.
       - name: Build
         run: node build.js
 
@@ -42,11 +58,16 @@ jobs:
           echo "tag=$tag  package.json=$pkg"
           [ "$tag" = "$pkg" ] || { echo "::error::tag $GITHUB_REF_NAME does not match package.json $pkg"; exit 1; }
 
+      # One name per platform, so four files can sit on the same release.
+      - name: Name it for this platform
+        shell: bash
+        run: mv "${{ matrix.built }}" "${{ matrix.asset }}"
+
       - name: Keep the build even when there is no release
         uses: actions/upload-artifact@v4
         with:
-          name: DiscordWebhookPoster
-          path: DiscordWebhookPoster.exe
+          name: ${{ matrix.asset }}
+          path: ${{ matrix.asset }}
           retention-days: 14
 
       # Created as a draft when the tag has no release yet, so the notes can be
@@ -58,6 +79,6 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1 \
-            || gh release create "$GITHUB_REF_NAME" --draft --title "${GITHUB_REF_NAME#v}" \
+            || gh release create "$GITHUB_REF_NAME" --draft --title "${GITHUB_REF_NAME#[vV]}" \
                  --notes "Built by GitHub Actions from ${GITHUB_SHA:0:7}."
-          gh release upload "$GITHUB_REF_NAME" DiscordWebhookPoster.exe --clobber
+          gh release upload "$GITHUB_REF_NAME" "${{ matrix.asset }}" --clobber
